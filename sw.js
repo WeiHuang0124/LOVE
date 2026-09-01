@@ -1,4 +1,4 @@
-const CACHE = 'lianto-v2';
+const CACHE = 'lianto-v4';
 const SHELL = ['./', './index.html', './config.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', e => {

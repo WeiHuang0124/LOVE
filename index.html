@@ -72,10 +72,15 @@ main{padding:18px}
 .wish .tick{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--edge);flex:none;display:flex;align-items:center;justify-content:center;font-size:12px}
 .wish.done .tick{background:var(--jade);border-color:var(--jade);color:#0F1326}
 .wish.done .t{text-decoration:line-through;color:var(--dim)}
-.wish .t{flex:1}
 .addrow{display:flex;gap:8px;margin-bottom:14px}
 .addrow input{flex:1;padding:12px 14px;border-radius:12px;background:var(--card);border:1px solid var(--edge);color:var(--ink)}
 .addrow button{padding:0 18px;border-radius:12px;background:var(--lamp);color:#20140A;font-weight:700}
+.seg{display:flex;background:var(--card);border-radius:12px;padding:4px;margin-top:16px;border:1px solid var(--edge)}
+.seg button{flex:1;padding:10px;border-radius:9px;color:var(--dim);font-size:14px;transition:.2s}
+.seg button.on{background:var(--lamp);color:#20140A;font-weight:700}
+.wish .t{flex:1;min-width:0;text-align:left}
+.wish .t .wt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wish .t .wm{color:var(--dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 .q{padding:14px;background:var(--card);border-radius:14px;margin-bottom:10px}
 .q.done{background:linear-gradient(180deg,rgba(87,214,180,.13),var(--card));border:1px solid rgba(87,214,180,.3)}
@@ -183,13 +188,14 @@ const QUESTS=[
  {id:'m4',t:'這個月出門四次',d:'同一個月內 4 個不同日子',xp:150,goal:4,f:s=>s.thisMonth},
  {id:'w5',t:'許願五個地方',d:'想去清單放進 5 個地方',xp:100,goal:5,f:s=>s.wishTotal},
  {id:'w3',t:'實現三個願望',d:'把想去的地方變成去過的',xp:250,goal:3,f:s=>s.wishDone},
+ {id:'wig',t:'蒐集口袋名單',d:'從 IG 存 5 個想去的地方',xp:180,goal:5,f:s=>s.wishIg},
  {id:'pair',t:'兩個人一起',d:'把另一半也拉進來',xp:400,goal:1,f:s=>s.paired?1:0},
 ];
 const RANKS=[[1,'新手旅伴'],[3,'週末探險家'],[5,'島內漫遊者'],[8,'縣道熟客'],[12,'台灣通'],[16,'傳說級情侶']];
 
 /* ══════════ 狀態 ══════════ */
 let DB={checkins:[],wishlist:[]};
-let sb=null, ME={uid:null,coupleId:null,code:null,members:1}, LIVE=false;
+let sb=null, ME={uid:null,coupleId:null,code:null,name:'',mates:[]}, LIVE=false;
 const photoCache={};
 const $=s=>document.querySelector(s);
 const uid=p=>p+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
@@ -224,16 +230,37 @@ async function adopt(coupleId){
   ME.coupleId=coupleId;
   const {data:cp}=await sb.from('couples').select('invite_code').eq('id',coupleId).maybeSingle();
   ME.code=cp&&cp.invite_code;
-  const {count}=await sb.from('profiles').select('id',{count:'exact',head:true}).eq('couple_id',coupleId);
-  ME.members=count||1;
   LIVE=true;
+  await loadMates();
   await pull();
   listen();
 }
+async function loadMates(){
+  if(!LIVE)return;
+  const {data}=await sb.from('profiles').select('id,display_name').eq('couple_id',ME.coupleId);
+  ME.mates=(data||[]).map(r=>({id:r.id,name:r.display_name||''}));
+  const me=ME.mates.find(m=>m.id===ME.uid);
+  ME.name=me?me.name:'';
+}
+const nameOf=id=>{
+  if(!id)return '';
+  if(id===ME.uid)return ME.name||'你';
+  const m=ME.mates.find(x=>x.id===id);
+  return m?(m.name||'另一半'):'';
+};
+const partnerName=()=>{
+  const p=ME.mates.find(m=>m.id!==ME.uid);
+  return p?(p.name||'另一半'):null;
+};
 function listen(){
   sb.channel('lianto:'+ME.coupleId)
     .on('postgres_changes',{event:'*',schema:'public',table:'checkins',filter:'couple_id=eq.'+ME.coupleId},()=>pull().then(render))
     .on('postgres_changes',{event:'*',schema:'public',table:'wishes',filter:'couple_id=eq.'+ME.coupleId},()=>pull().then(render))
+    .on('postgres_changes',{event:'*',schema:'public',table:'profiles',filter:'couple_id=eq.'+ME.coupleId},async()=>{
+        const before=ME.mates.length;
+        await loadMates(); render();
+        if(ME.mates.length>before){const p=partnerName();if(p)toast(p+' 加入了')}
+      })
     .subscribe();
 }
 async function pull(){
@@ -243,19 +270,22 @@ async function pull(){
   ]);
   if(a.error||b.error){console.warn(a.error||b.error);return}
   DB.checkins=(a.data||[]).map(r=>({id:r.id,name:r.name,county:r.county,date:r.date,note:r.note||'',
-    lat:r.lat,lng:r.lng,igs:r.igs||[],photos:r.photos||0,photo_path:r.photo_path,hasPhoto:!!r.photo_path}));
-  DB.wishlist=(b.data||[]).map(r=>({id:r.id,title:r.title,done:!!r.done}));
+    lat:r.lat,lng:r.lng,igs:r.igs||[],photos:r.photos||0,photo_path:r.photo_path,
+    hasPhoto:!!r.photo_path,by:r.created_by}));
+  DB.wishlist=(b.data||[]).map(r=>({id:r.id,title:r.title,done:!!r.done,
+    county:r.county||'',note:r.note||'',ig:r.ig||null,by:r.created_by}));
   saveLocal();
   DB.checkins.forEach(c=>{if(c.hasPhoto)hydratePhoto(c)});
 }
 const row=c=>({id:c.id,couple_id:ME.coupleId,name:c.name,county:c.county,date:c.date,note:c.note,
   lat:c.lat??null,lng:c.lng??null,igs:c.igs||[],photos:c.photos||0,photo_path:c.photo_path||null,
-  created_by:ME.uid,updated_at:new Date().toISOString()});
+  created_by:c.by||ME.uid,updated_at:new Date().toISOString()});
 
 async function pushCheckin(c){ if(LIVE) await sb.from('checkins').upsert(row(c)) }
 async function dropCheckin(id){ if(LIVE) await sb.from('checkins').delete().eq('id',id) }
 async function pushWish(w){ if(LIVE) await sb.from('wishes').upsert(
-  {id:w.id,couple_id:ME.coupleId,title:w.title,done:w.done,created_by:ME.uid,updated_at:new Date().toISOString()}) }
+  {id:w.id,couple_id:ME.coupleId,title:w.title,done:w.done,county:w.county||'',note:w.note||'',
+   ig:w.ig||null,created_by:w.by||ME.uid,updated_at:new Date().toISOString()}) }
 async function dropWish(id){ if(LIVE) await sb.from('wishes').delete().eq('id',id) }
 
 async function uploadPhoto(id,dataUrl){
@@ -304,6 +334,10 @@ async function boot(){
 }
 
 /* ══════════ 情侶空間 ══════════ */
+function askNick(){
+  const n=(prompt('你的暱稱是？（另一半會看到）')||'').trim();
+  return n.slice(0,12);
+}
 function sheetOnboard(){
   $('#sheet').innerHTML=`
     <h2>你們的空間</h2>
@@ -316,21 +350,24 @@ function sheetOnboard(){
   $('#veil').classList.add('on');
   $('#o-skip').onclick=()=>$('#veil').classList.remove('on');
   $('#o-new').onclick=async()=>{
-    const {data,error}=await sb.rpc('create_couple',{nick:null});
+    const nick=askNick(); if(!nick)return;
+    const {data,error}=await sb.rpc('create_couple',{nick});
     if(error)return toast(error.message);
     const r=Array.isArray(data)?data[0]:data;
     await adopt(r.couple_id);
     await migrateLocal();
-    $('#dot').classList.add('live');render();sheetSettings();
+    render();sheetSettings();
   };
   $('#o-join').onclick=async()=>{
     const code=(prompt('輸入另一半給你的邀請碼')||'').trim();
     if(!code)return;
-    const {data,error}=await sb.rpc('join_couple',{code,nick:null});
+    const nick=askNick(); if(!nick)return;
+    const {data,error}=await sb.rpc('join_couple',{code,nick});
     if(error)return toast(error.message);
     await adopt(data);
-    $('#dot').classList.add('live');render();
-    toast('接上了');$('#veil').classList.remove('on');
+    render();$('#veil').classList.remove('on');
+    const p=partnerName();
+    toast(p?`接上 ${p} 了`:'接上了');
   };
 }
 async function migrateLocal(){
@@ -342,23 +379,56 @@ async function migrateLocal(){
   for(const w of DB.wishlist) await pushWish(w);
   await pull();
 }
+async function saveNick(n){
+  ME.name=n;
+  await sb.from('profiles').update({display_name:n}).eq('id',ME.uid);
+  await loadMates();render();
+}
 function sheetSettings(){
   const cfg=window.LIANTO_CONFIG||{};
+  const mates=ME.mates.map(m=>{
+    const you=m.id===ME.uid;
+    return `<div class="wish" style="margin-bottom:6px">
+      <div class="tick" style="background:${you?'var(--lamp)':'var(--jade)'};border:0;color:#0F1326;font-weight:700">
+        ${esc((m.name||'?').slice(0,1))}</div>
+      <div class="t"><div class="wt">${esc(m.name||'（還沒取名字）')}${you?' <span class="pill">你</span>':''}</div></div>
+    </div>`;
+  }).join('');
+
   $('#sheet').innerHTML=`
     <h2>同步</h2>
     ${!cfg.url?`<div class="hint">還沒設定 Supabase，目前只存在這支手機。填好 config.js 就會開啟同步。</div>`:
-      LIVE?`<div class="hint">已連線・這個空間有 ${ME.members} 個人</div>
+      LIVE?`
+        <label>這個空間裡的人</label>
+        ${mates||'<div class="hint">讀取中…</div>'}
+        ${ME.mates.length<2?`<div class="hint">只有你一個人。把下面的邀請碼給另一半。</div>`:''}
+
+        <label>你的暱稱</label>
+        <div class="addrow" style="margin-bottom:0">
+          <input id="s-nick" value="${esc(ME.name)}" placeholder="怎麼稱呼你" maxlength="12">
+          <button id="s-nickok">改</button>
+        </div>
+
         <label>邀請碼</label>
         <div class="code">${ME.code||'—'}</div>
-        <div class="hint">把這串給另一半，在他手機上選「我有邀請碼」輸入。一個空間最多兩個人。</div>
-        <div class="two"><button class="act ghost" id="s-copy">複製邀請碼</button><button class="act" id="s-pull">重新抓一次</button></div>`
-      :`<div class="hint">連不上 Supabase，先用單機模式。檢查 config.js 的網址和金鑰。</div>
+        <div class="hint">一個空間最多兩個人。清掉瀏覽器資料等於登出，這串記起來才接得回來。</div>
+        <div class="two">
+          <button class="act ghost" id="s-copy">複製邀請碼</button>
+          <button class="act" id="s-pull">重新抓一次</button>
+        </div>`
+      :`<div class="hint">連不上 Supabase，先用單機模式。檢查 config.js 的網址和金鑰，還有 Anonymous sign-ins 有沒有打開。</div>
         <button class="act" id="s-retry" style="margin-top:16px">再試一次</button>`}
     <button class="act ghost" id="s-close" style="margin-top:10px">關閉</button>`;
   $('#veil').classList.add('on');
   $('#s-close').onclick=()=>$('#veil').classList.remove('on');
+  const nk=$('#s-nickok');
+  if(nk)nk.onclick=async()=>{
+    const v=$('#s-nick').value.trim();
+    if(!v)return;
+    await saveNick(v.slice(0,12));toast('改好了');sheetSettings();
+  };
   const cp=$('#s-copy'); if(cp)cp.onclick=()=>{navigator.clipboard.writeText(ME.code||'');toast('複製好了')};
-  const pl=$('#s-pull'); if(pl)pl.onclick=async()=>{await pull();render();toast('更新完成')};
+  const pl=$('#s-pull'); if(pl)pl.onclick=async()=>{await loadMates();await pull();render();toast('更新完成')};
   const rt=$('#s-retry'); if(rt)rt.onclick=()=>location.reload();
 }
 $('#btn-set').onclick=()=>{ if(sb&&!ME.coupleId)sheetOnboard(); else sheetSettings() };
@@ -384,42 +454,123 @@ async function pasteIg(){
   if(!code)return toast('那不是 IG 貼文連結');
   sheetIg(code,null,null,null);
 }
+const CTY_ALIAS={'台北':'臺北市','臺北':'臺北市','新北':'新北市','基隆':'基隆市','桃園':'桃園市',
+ '新竹':'新竹縣','苗栗':'苗栗縣','台中':'臺中市','臺中':'臺中市','彰化':'彰化縣','南投':'南投縣',
+ '雲林':'雲林縣','嘉義':'嘉義縣','台南':'臺南市','臺南':'臺南市','高雄':'高雄市','屏東':'屏東縣',
+ '宜蘭':'宜蘭縣','花蓮':'花蓮縣','台東':'臺東縣','臺東':'臺東縣','澎湖':'澎湖縣','金門':'金門縣',
+ '馬祖':'連江縣','連江':'連江縣'};
+function guessCounty(text){
+  if(!text)return null;
+  for(const k in CTY_ALIAS) if(text.includes(k)) return CTY_ALIAS[k];
+  return null;
+}
+/* 從文案第一行猜地點名稱：抓引號、書名號裡的字，或第一個短句 */
+function guessPlace(cap){
+  if(!cap)return '';
+  const q=cap.match(/[「『【《\u201c]([^」』】》\u201d]{2,20})[」』】》\u201d]/);
+  if(q)return q[1].trim();
+  const line=cap.split(/[\n|｜]/)[0].replace(/#\S+/g,'').trim();
+  if(line&&line.length<=20)return line;
+  const seg=line.split(/[，,。！!？?・\s]/).filter(x=>x.length>=2&&x.length<=14)[0];
+  return seg||'';
+}
+async function fetchIgMeta(code){
+  try{
+    const r=await fetch('/api/ig?url='+encodeURIComponent(`https://www.instagram.com/p/${code}/`));
+    if(!r.ok)return{};
+    return await r.json();
+  }catch(e){return{}}
+}
+
 function sheetIg(code,lat,lng,date){
   const today=date||new Date().toISOString().slice(0,10);
-  const cty=lat?nearestCounty(lat,lng):'臺北市';
+  let mode=lat?'been':'want';           // 帶了座標多半是人在現場
+  let LA=lat,LO=lng;
+  const cty0=lat?nearestCounty(lat,lng):'臺北市';
+
   $('#sheet').innerHTML=`
-    <h2>存下這則貼文</h2>
-    <div class="hint">IG 不會給出貼文的地點，所以下面要補一次。</div>
-    <div class="igbox"><iframe src="${igEmbed(code)}" loading="lazy"></iframe></div>
-    <label>接到哪一次打卡</label>
-    <select id="f-attach"><option value="">建立新的打卡</option>
-      ${DB.checkins.slice(0,20).map(c=>`<option value="${c.id}">${esc(c.name)}・${c.date}</option>`).join('')}</select>
-    <div id="f-new">
-      <label>地點名稱</label><input id="f-name" placeholder="例如：象鼻岩">
-      <label>位置</label>
-      <div class="locrow"><button id="f-here">用目前位置</button>
-        <span class="hint" id="f-locmsg" style="margin:0">${lat?`已帶入 ${lat.toFixed(4)}, ${lng.toFixed(4)}`:'還沒有座標'}</span></div>
-      <label>縣市</label>
-      <select id="f-cty">${NAMES.map(n=>`<option ${n===cty?'selected':''}>${n}</option>`).join('')}</select>
-      <label>日期</label><input id="f-date" type="date" value="${today}">
-      <label>想寫點什麼</label><textarea id="f-note" placeholder="那天的天氣、吃了什麼、誰先笑出來"></textarea>
+    <h2>這則貼文要放哪</h2>
+    <div class="seg">
+      <button data-m="want" class="${mode==='want'?'on':''}">想去</button>
+      <button data-m="been" class="${mode==='been'?'on':''}">去過了</button>
     </div>
+    <div class="hint" id="f-why"></div>
+    <div class="igbox"><iframe src="${igEmbed(code)}" loading="lazy"></iframe></div>
+
+    <div id="w-form">
+      <label>地點名稱</label>
+      <input id="w-name" placeholder="讀取文案中…">
+      <label>大概在哪（可留空）</label>
+      <select id="w-cty"><option value="">還不確定</option>${NAMES.map(n=>`<option>${n}</option>`).join('')}</select>
+      <label>備註</label>
+      <textarea id="w-note" placeholder="要點什麼、幾點去、誰推薦的"></textarea>
+    </div>
+
+    <div id="b-form" style="display:none">
+      <label>接到哪一次打卡</label>
+      <select id="f-attach"><option value="">建立新的打卡</option>
+        ${DB.checkins.slice(0,20).map(c=>`<option value="${c.id}">${esc(c.name)}・${c.date}</option>`).join('')}</select>
+      <div id="f-new">
+        <label>地點名稱</label><input id="f-name" placeholder="例如：象鼻岩">
+        <label>位置</label>
+        <div class="locrow"><button id="f-here">用目前位置</button>
+          <span class="hint" id="f-locmsg" style="margin:0">${lat?`已帶入 ${lat.toFixed(4)}, ${lng.toFixed(4)}`:'還沒有座標'}</span></div>
+        <label>縣市</label>
+        <select id="f-cty">${NAMES.map(n=>`<option ${n===cty0?'selected':''}>${n}</option>`).join('')}</select>
+        <label>日期</label><input id="f-date" type="date" value="${today}">
+        <label>想寫點什麼</label><textarea id="f-note"></textarea>
+      </div>
+    </div>
+
     <div class="two"><button class="act ghost" id="f-cancel">不要了</button><button class="act" id="f-ok">存起來</button></div>`;
   $('#veil').classList.add('on');
-  let LA=lat,LO=lng;
+
+  const why={want:'存進「想去」清單。真的去了再打勾，會自動變成打卡。',
+             been:'直接記成一次打卡，會點亮縣市。'};
+  const paint=()=>{
+    $('#w-form').style.display=mode==='want'?'block':'none';
+    $('#b-form').style.display=mode==='been'?'block':'none';
+    $('#f-why').textContent=why[mode];
+    $('#sheet').querySelectorAll('.seg button').forEach(b=>b.classList.toggle('on',b.dataset.m===mode));
+  };
+  paint();
+  $('#sheet').querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{mode=b.dataset.m;paint()});
+
+  /* 抓文案，兩邊的名稱欄位都幫忙填 */
+  fetchIgMeta(code).then(m=>{
+    const cap=m.caption||'', place=guessPlace(cap), c=guessCounty(cap);
+    const wn=$('#w-name'), fn=$('#f-name');
+    if(wn){wn.placeholder='例如：象鼻岩'; if(place&&!wn.value)wn.value=place}
+    if(fn&&place&&!fn.value)fn.value=place;
+    if(c){const ws=$('#w-cty');if(ws&&!ws.value)ws.value=c}
+    const wnote=$('#w-note');
+    if(wnote&&!wnote.value&&m.author)wnote.value='@'+m.author;
+  });
+
   if(LA)lookupName(LA,LO).then(n=>{const i=$('#f-name');if(n&&i&&!i.value)i.value=n});
-  $('#f-attach').onchange=e=>{$('#f-new').style.display=e.target.value?'none':'block'};
-  $('#f-here').onclick=()=>{
+  const at=$('#f-attach');
+  if(at)at.onchange=e=>{$('#f-new').style.display=e.target.value?'none':'block'};
+  const hb=$('#f-here');
+  if(hb)hb.onclick=()=>{
     $('#f-locmsg').textContent='定位中…';
     navigator.geolocation.getCurrentPosition(p=>{
       LA=p.coords.latitude;LO=p.coords.longitude;
       $('#f-locmsg').textContent=`${LA.toFixed(4)}, ${LO.toFixed(4)}`;
       $('#f-cty').value=nearestCounty(LA,LO);
-      lookupName(LA,LO).then(n=>{const i=$('#f-name');if(n&&i&&!i.value)i.value=n});
     },()=>$('#f-locmsg').textContent='拿不到位置，手動選縣市');
   };
+
   $('#f-cancel').onclick=()=>$('#veil').classList.remove('on');
   $('#f-ok').onclick=async()=>{
+    if(mode==='want'){
+      const w={id:uid('w'),title:$('#w-name').value.trim()||'（還沒命名）',
+        done:false,county:$('#w-cty').value||'',note:$('#w-note').value.trim(),ig:code,by:ME.uid};
+      DB.wishlist.unshift(w);saveLocal();render();await pushWish(w);
+      $('#veil').classList.remove('on');
+      toast('放進想去清單了');
+      document.querySelector('nav button[data-p="wish"]').click();
+      return;
+    }
     const att=$('#f-attach').value;
     let target;
     if(att){
@@ -427,7 +578,7 @@ function sheetIg(code,lat,lng,date){
       target.igs=target.igs||[]; if(!target.igs.includes(code))target.igs.push(code);
     }else{
       target={id:uid('c'),name:$('#f-name').value.trim()||$('#f-cty').value,county:$('#f-cty').value,
-        date:$('#f-date').value,note:$('#f-note').value.trim(),lat:LA,lng:LO,photos:0,hasPhoto:false,igs:[code]};
+        date:$('#f-date').value,note:$('#f-note').value.trim(),lat:LA,lng:LO,photos:0,hasPhoto:false,igs:[code],by:ME.uid};
       DB.checkins.unshift(target);
     }
     saveLocal();await pushCheckin(target);
@@ -545,7 +696,7 @@ function sheetPhoto(g){
         const id=uid('c');
         const c={id,name:$('#f-name').value.trim()||$('#f-cty').value,county:$('#f-cty').value,
           date:$('#f-date').value,note:$('#f-note').value.trim(),lat:g.lat,lng:g.lng,
-          photos:g.shots.length,hasPhoto:!!cover,igs:[]};
+          photos:g.shots.length,hasPhoto:!!cover,igs:[],by:ME.uid};
         if(cover){photoCache[id]=cover;cache.set('lovemap:photo:'+id,cover);c.photo_path=await uploadPhoto(id,cover)}
         DB.checkins.unshift(c);saveLocal();await pushCheckin(c);
         const b=level().lv;render();const a=level().lv;
@@ -569,7 +720,7 @@ function sheetDetail(id){
   const c=DB.checkins.find(x=>x.id===id);if(!c)return;
   $('#sheet').innerHTML=`
     <h2>${esc(c.name)}</h2>
-    <div class="hint"><span class="pill">${c.county}</span>${c.date}${c.lat?`・${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}`:''}</div>
+    <div class="hint"><span class="pill">${c.county}</span>${c.date}${c.lat?`・${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}`:''}${(LIVE&&nameOf(c.by))?'・'+esc(nameOf(c.by))+' 記的':''}</div>
     ${photoCache[id]?`<img class="preview" src="${photoCache[id]}" style="margin-top:14px">`:''}
     ${c.note?`<p style="margin:14px 0 0">${esc(c.note)}</p>`:''}
     ${(c.igs||[]).map(k=>`<div class="igbox"><iframe src="${igEmbed(k)}" loading="lazy"></iframe></div>`).join('')}
@@ -599,7 +750,8 @@ function stats(){
     thisMonth:(()=>{const mk={};DB.checkins.forEach(c=>{const m=(c.date||'').slice(0,7);(mk[m]=mk[m]||new Set()).add(c.date)});
       return Math.max(0,...Object.values(mk).map(s=>s.size))})(),
     wishTotal:DB.wishlist.length,wishDone:DB.wishlist.filter(w=>w.done).length,
-    paired:ME.members>=2};
+    wishIg:DB.wishlist.filter(w=>w.ig).length,
+    paired:ME.mates.length>=2};
 }
 function totalXp(){const s=stats();let x=s.n*20+s.photos*5+s.igs*10;
   QUESTS.forEach(q=>{if(q.f(s)>=q.goal)x+=q.xp});return x}
@@ -616,7 +768,10 @@ function render(){
   $('#lv').textContent=L.lv;$('#rank').textContent=L.rank;
   $('#xpnum').textContent=`${L.xp} / ${L.next} XP`;
   $('#xpbar').style.width=L.pct+'%';
-  $('#sub').textContent=s.n?`${s.n} 個地方・點亮 ${s.cities.size}/22 縣市`:'還沒有走過的地方';
+  const mate=LIVE?partnerName():null;
+  const base=s.n?`${s.n} 個地方・點亮 ${s.cities.size}/22 縣市`:'還沒有走過的地方';
+  $('#sub').textContent=mate?`和 ${mate} ・ ${base}`:base;
+  $('#dot').title=LIVE?(mate?`和 ${mate} 同步中`:'已連線，還沒有另一半加入'):'單機模式';
   $('#dot').classList.toggle('live',LIVE);
   drawLog();drawMap();drawWish();drawQuest();
 }
@@ -633,7 +788,7 @@ function drawLog(){
                     :`<div class="noimg">${(c.igs||[]).length?'◈':'◇'}</div>`}
         <div class="body">
           <div class="name">${esc(c.name)}</div>
-          <div class="meta"><span class="pill">${c.county}</span>${(c.igs||[]).length?`<span class="pill ig">IG ${c.igs.length}</span>`:''}${c.date}${c.photos?' ・'+c.photos+' 張':''}</div>
+          <div class="meta"><span class="pill">${c.county}</span>${(c.igs||[]).length?`<span class="pill ig">IG ${c.igs.length}</span>`:''}${c.date}${c.photos?' ・'+c.photos+' 張':''}${(LIVE&&ME.mates.length>1&&nameOf(c.by))?' ・'+esc(nameOf(c.by)):''}</div>
           ${c.note?`<div class="meta" style="margin-top:2px">${esc(c.note)}</div>`:''}
         </div>
       </button>`).join(''):
@@ -669,24 +824,83 @@ function drawMap(){
 }
 function drawWish(){
   const el=$('#p-wish');
-  el.innerHTML=`<div class="addrow"><input id="w-in" placeholder="下一個想去哪裡？"><button id="w-add">加</button></div>
-    ${DB.wishlist.length?DB.wishlist.map(w=>`
-      <div class="wish ${w.done?'done':''}"><div class="tick" data-tick="${w.id}">${w.done?'✓':''}</div>
-      <div class="t">${esc(w.title)}</div><button data-wdel="${w.id}" style="color:var(--dim);padding:8px">✕</button></div>`).join(''):
-      `<div class="empty"><strong>還沒有想去的地方</strong>看到不錯的就先丟進來，去了再打勾。</div>`}`;
+  const todo=DB.wishlist.filter(w=>!w.done), done=DB.wishlist.filter(w=>w.done);
+  const row=w=>`
+    <div class="wish ${w.done?'done':''}">
+      <div class="tick" data-tick="${w.id}">${w.done?'✓':''}</div>
+      <button class="t" data-wopen="${w.id}">
+        <div class="wt">${esc(w.title)}</div>
+        <div class="wm">${w.county?`<span class="pill">${w.county}</span>`:''}${w.ig?`<span class="pill ig">IG</span>`:''}${(LIVE&&ME.mates.length>1&&nameOf(w.by))?esc(nameOf(w.by))+'存的 ':''}${esc(w.note||'')}</div>
+      </button>
+      <button data-wdel="${w.id}" style="color:var(--dim);padding:8px">✕</button>
+    </div>`;
+  el.innerHTML=`
+    <button class="act ig" id="w-fromig">從 IG 存一個想去的地方</button>
+    <div class="addrow" style="margin-top:14px"><input id="w-in" placeholder="或直接打字"><button id="w-add">加</button></div>
+    ${DB.wishlist.length?`
+      ${todo.length?`<div class="sechead"><h2>想去</h2><span>${todo.length}</span></div>${todo.map(row).join('')}`:''}
+      ${done.length?`<div class="sechead"><h2>去過了</h2><span>${done.length}</span></div>${done.map(row).join('')}`:''}`
+    :`<div class="empty"><strong>看到不錯的就先丟進來</strong>在 IG 上看到推薦的景點，按分享選「戀途」，選「想去」就存下來了。</div>`}`;
+
+  $('#w-fromig').onclick=pasteIg;
   const add=async()=>{const v=$('#w-in').value.trim();if(!v)return;
-    const w={id:uid('w'),title:v,done:false};
+    const w={id:uid('w'),title:v,done:false,county:'',note:'',ig:null,by:ME.uid};
     DB.wishlist.unshift(w);saveLocal();render();await pushWish(w)};
   $('#w-add').onclick=add;
   $('#w-in').onkeydown=e=>{if(e.key==='Enter')add()};
-  el.querySelectorAll('[data-tick]').forEach(b=>b.onclick=async()=>{
-    const w=DB.wishlist.find(x=>x.id===b.dataset.tick);if(!w)return;
-    w.done=!w.done;saveLocal();const t=w.title,d=w.done;render();await pushWish(w);
-    if(d&&confirm(`「${t}」去過了，順便記一次打卡嗎？`))manualCheckin(t)});
+  el.querySelectorAll('[data-wopen]').forEach(b=>b.onclick=()=>sheetWish(b.dataset.wopen));
+  el.querySelectorAll('[data-tick]').forEach(b=>b.onclick=()=>toggleWish(b.dataset.tick));
   el.querySelectorAll('[data-wdel]').forEach(b=>b.onclick=async()=>{
     const id=b.dataset.wdel;
     DB.wishlist=DB.wishlist.filter(x=>x.id!==id);saveLocal();render();await dropWish(id)});
 }
+
+async function toggleWish(id){
+  const w=DB.wishlist.find(x=>x.id===id); if(!w)return;
+  w.done=!w.done; saveLocal(); render(); await pushWish(w);
+  if(!w.done)return;
+  if(!confirm(`「${w.title}」去過了，記成一次打卡嗎？`))return;
+  const c={id:uid('c'),name:w.title,county:w.county||'臺北市',
+    date:new Date().toISOString().slice(0,10),note:w.note||'',
+    lat:null,lng:null,photos:0,hasPhoto:false,igs:w.ig?[w.ig]:[],by:ME.uid};
+  DB.checkins.unshift(c);saveLocal();
+  if(navigator.geolocation)navigator.geolocation.getCurrentPosition(async p=>{
+    c.lat=p.coords.latitude;c.lng=p.coords.longitude;
+    if(!w.county)c.county=nearestCounty(c.lat,c.lng);
+    saveLocal();render();await pushCheckin(c);
+  },async()=>{await pushCheckin(c)});
+  const b=level().lv;render();const a=level().lv;
+  toast(a>b?`升到 Lv.${a}！`:'記成打卡了');
+  document.querySelector('nav button[data-p="log"]').click();
+}
+
+function sheetWish(id){
+  const w=DB.wishlist.find(x=>x.id===id); if(!w)return;
+  $('#sheet').innerHTML=`
+    <h2>${esc(w.title)}</h2>
+    <div class="hint">${w.county?`<span class="pill">${w.county}</span>`:''}${w.done?'已經去過':'還沒去'}</div>
+    ${w.ig?`<div class="igbox"><iframe src="${igEmbed(w.ig)}" loading="lazy"></iframe></div>`:''}
+    <label>地點名稱</label><input id="e-name" value="${esc(w.title)}">
+    <label>大概在哪</label>
+    <select id="e-cty"><option value="">還不確定</option>${NAMES.map(n=>`<option ${n===w.county?'selected':''}>${n}</option>`).join('')}</select>
+    <label>備註</label><textarea id="e-note">${esc(w.note||'')}</textarea>
+    <div class="two">
+      <button class="act ghost" id="e-close">關閉</button>
+      <button class="act" id="e-save">存變更</button>
+    </div>
+    ${w.done?'':'<button class="act ghost" id="e-go" style="margin-top:10px;border-color:var(--jade);color:var(--jade)">我們去過了</button>'}`;
+  $('#veil').classList.add('on');
+  $('#e-close').onclick=()=>$('#veil').classList.remove('on');
+  $('#e-save').onclick=async()=>{
+    w.title=$('#e-name').value.trim()||w.title;
+    w.county=$('#e-cty').value; w.note=$('#e-note').value.trim();
+    saveLocal();render();await pushWish(w);
+    $('#veil').classList.remove('on');toast('改好了');
+  };
+  const g=$('#e-go');
+  if(g)g.onclick=()=>{$('#veil').classList.remove('on');toggleWish(id)};
+}
+
 function drawQuest(){
   const s=stats();
   const rows=QUESTS.map(q=>({q,p:Math.min(q.f(s),q.goal),done:q.f(s)>=q.goal}))

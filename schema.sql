@@ -38,6 +38,9 @@ create table if not exists public.wishes (
   couple_id  uuid not null references public.couples on delete cascade,
   title      text not null,
   done       boolean default false,
+  county     text default '',
+  note       text default '',
+  ig         text,
   created_by uuid,
   updated_at timestamptz default now()
 );
@@ -133,6 +136,7 @@ grant execute on function public.create_couple(text) to authenticated, anon;
 grant execute on function public.join_couple(text, text) to authenticated, anon;
 
 -- ---------- 即時同步 ----------
+alter publication supabase_realtime add table public.profiles;
 alter publication supabase_realtime add table public.checkins;
 alter publication supabase_realtime add table public.wishes;
 

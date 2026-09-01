@@ -7,7 +7,9 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="戀途">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
 :root{
@@ -26,8 +28,11 @@ h1,h2,h3{font-family:"Noto Serif TC","Songti TC",serif;font-weight:600;margin:0}
 button{font-family:inherit;font-size:inherit;cursor:pointer;border:none;background:none;color:inherit}
 input,select,textarea{font-family:inherit;font-size:15px}
 
-.crown{padding:calc(16px + env(safe-area-inset-top)) 18px 16px;
+.crown{padding:calc(16px + env(safe-area-inset-top,0px)) 18px 16px;
   background:linear-gradient(180deg,var(--night),var(--deep));border-bottom:1px solid var(--edge)}
+/* 加到主畫面時，某些 iOS 版本的 safe-area 會回傳 0，用 max() 兜底 */
+html.pwa .crown{padding-top:max(calc(16px + env(safe-area-inset-top,0px)),28px)}
+html.pwa nav{padding-bottom:max(env(safe-area-inset-bottom,0px),10px)}
 .crown-top{display:flex;align-items:center;gap:10px}
 .mark{font-family:"Noto Serif TC",serif;font-size:24px;letter-spacing:.12em;flex:none;line-height:1.2}
 .title-note{color:var(--dim);font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -155,9 +160,14 @@ main{padding:18px}
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<script src="config.js"></script>
+<script src="config.js?v=0.6.0"></script>
 <script>
-const VERSION='0.5.0';   /* 改版本時同步改 sw.js 第一行的 CACHE */
+const VERSION='0.6.0';   /* 改版本時同步改 sw.js 第一行的 CACHE 和 config.js?v= */
+
+/* 加到主畫面 / 獨立視窗模式的判斷，供 CSS 兜底用 */
+const PWA = window.navigator.standalone===true || matchMedia('(display-mode: standalone)').matches
+         || matchMedia('(display-mode: fullscreen)').matches;
+if(PWA) document.documentElement.classList.add('pwa');
 
 /* ══════════ 縣市 ══════════ */
 const CTY=[
@@ -399,55 +409,80 @@ function sheetSettings(){
     return `<div class="wish" style="margin-bottom:6px">
       <div class="tick" style="background:${you?'var(--lamp)':'var(--jade)'};border:0;color:#0F1326;font-weight:700">
         ${esc((m.name||'?').slice(0,1))}</div>
-      <div class="t"><div class="wt">${esc(m.name||'（還沒取名字）')}${you?' <span class="pill">你</span>':''}</div></div>
+      <div class="t"><div class="wt">${esc(m.name||'（沒取名字）')}${you?' <span class="pill">這台</span>':''}</div></div>
+      <button data-kick="${m.id}" style="color:var(--dim);padding:8px">✕</button>
     </div>`;
   }).join('');
 
   $('#sheet').innerHTML=`
-    <h2>同步</h2>
-    ${!cfg.url?`<div class="hint">還沒設定 Supabase，目前只存在這支手機。填好 config.js 就會開啟同步。</div>`:
+    <h2>設定</h2>
+    ${!cfg.url?`<div class="hint">還沒設定 Supabase，資料只存在這台裝置。</div>`:
       LIVE?`
-        <label>這個空間裡的人</label>
+        <label>空間裡的裝置（${ME.mates.length}/4）</label>
         ${mates||'<div class="hint">讀取中…</div>'}
-        ${ME.mates.length<2?`<div class="hint">只有你一個人。把下面的邀請碼給另一半。</div>`:''}
+        <div class="hint">同一個人的手機和電腦各算一台。要換裝置就先把舊的 ✕ 掉。</div>
 
-        <label>你的暱稱</label>
+        <label>這台裝置的名字</label>
         <div class="addrow" style="margin-bottom:0">
-          <input id="s-nick" value="${esc(ME.name)}" placeholder="怎麼稱呼你" maxlength="12">
+          <input id="s-nick" value="${esc(ME.name)}" placeholder="怎麼稱呼" maxlength="12">
           <button id="s-nickok">改</button>
         </div>
 
         <label>邀請碼</label>
         <div class="code">${ME.code||'—'}</div>
-        <div class="hint">一個空間最多兩個人。清掉瀏覽器資料等於登出，這串記起來才接得回來。</div>
+        <div class="hint">在別的手機或電腦上開同一個網址，選「我有邀請碼」輸入這串，資料就會同步過去。這串記在別的地方，清掉瀏覽器資料時要靠它接回來。</div>
         <div class="two">
           <button class="act ghost" id="s-copy">複製邀請碼</button>
-          <button class="act" id="s-pull">重新抓一次</button>
+          <button class="act" id="s-pull">立刻同步</button>
         </div>`
-      :`<div class="hint">連不上 Supabase，先用單機模式。檢查 config.js 的網址和金鑰，還有 Anonymous sign-ins 有沒有打開。</div>
+      :`<div class="hint">連不上 Supabase，目前是單機模式。檢查 config.js 的網址和金鑰，還有 Authentication 裡的 Anonymous sign-ins 有沒有打開。</div>
         <button class="act" id="s-retry" style="margin-top:16px">再試一次</button>`}
-    <button class="act ghost" id="s-close" style="margin-top:10px">關閉</button>
-    <div class="hint" style="text-align:center;margin-top:14px">戀途 v${VERSION}${window.matchMedia('(display-mode: standalone)').matches?'・已安裝':'・瀏覽器'}</div>
-    <button class="hint" id="s-refresh" style="display:block;margin:6px auto 0;text-decoration:underline">強制更新到最新版</button>`;
+
+    <label>版本與快取</label>
+    <div class="wish" style="margin-bottom:8px">
+      <div class="t"><div class="wt">戀途 v${VERSION}</div>
+      <div class="wm">${PWA?'主畫面 App':'瀏覽器'}${LIVE?'・同步中':'・單機'}</div></div>
+    </div>
+    <button class="act ghost" id="s-clear">清除快取並重新載入</button>
+    <div class="hint">只會清掉程式檔案的快取，${LIVE?'打卡資料存在雲端，不會不見。':'⚠️ 目前是單機模式，資料存在這台裝置，清除前先確認你有邀請碼可以接回來。'}</div>
+
+    <button class="act ghost" id="s-close" style="margin-top:16px">關閉</button>`;
   $('#veil').classList.add('on');
   $('#s-close').onclick=()=>$('#veil').classList.remove('on');
-  $('#s-refresh').onclick=async()=>{
+
+  $('#s-clear').onclick=async()=>{
+    if(!LIVE&&!confirm('目前沒有雲端同步，清除後本機資料還在但程式會重載。要繼續嗎？'))return;
+    toast('清除中…');
     try{
       const rs=await navigator.serviceWorker.getRegistrations();
       await Promise.all(rs.map(r=>r.unregister()));
+    }catch(e){}
+    try{
       const ks=await caches.keys();
       await Promise.all(ks.map(k=>caches.delete(k)));
     }catch(e){}
-    location.reload(true);
+    location.replace(location.pathname+'?fresh='+Date.now());
   };
+
   const nk=$('#s-nickok');
   if(nk)nk.onclick=async()=>{
     const v=$('#s-nick').value.trim();
     if(!v)return;
     await saveNick(v.slice(0,12));toast('改好了');sheetSettings();
   };
+  $('#sheet').querySelectorAll('[data-kick]').forEach(b=>b.onclick=async()=>{
+    const id=b.dataset.kick, self=id===ME.uid;
+    const m=ME.mates.find(x=>x.id===id);
+    if(!confirm(self?'把這台裝置移出空間？之後要用邀請碼才能接回來。'
+                    :`把「${m?m.name||'未命名':''}」移出空間？`))return;
+    const {error}=await sb.rpc('remove_member',{target:id});
+    if(error)return toast(error.message);
+    if(self){ME.coupleId=null;ME.code=null;ME.mates=[];LIVE=false;
+      DB={checkins:[],wishlist:[]};saveLocal();render();sheetOnboard();return}
+    await loadMates();render();sheetSettings();toast('移除了');
+  });
   const cp=$('#s-copy'); if(cp)cp.onclick=()=>{navigator.clipboard.writeText(ME.code||'');toast('複製好了')};
-  const pl=$('#s-pull'); if(pl)pl.onclick=async()=>{await loadMates();await pull();render();toast('更新完成')};
+  const pl=$('#s-pull'); if(pl)pl.onclick=async()=>{await loadMates();await pull();render();toast('同步完成')};
   const rt=$('#s-retry'); if(rt)rt.onclick=()=>location.reload();
 }
 $('#btn-set').onclick=()=>{ if(sb&&!ME.coupleId)sheetOnboard(); else sheetSettings() };
@@ -739,17 +774,33 @@ function sheetDetail(id){
   const c=DB.checkins.find(x=>x.id===id);if(!c)return;
   $('#sheet').innerHTML=`
     <h2>${esc(c.name)}</h2>
-    <div class="hint"><span class="pill">${c.county}</span>${c.date}${c.lat?`・${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}`:''}${(LIVE&&nameOf(c.by))?'・'+esc(nameOf(c.by))+' 記的':''}</div>
+    <div class="hint">${c.lat?`${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}`:'沒有座標'}${(LIVE&&nameOf(c.by))?'・'+esc(nameOf(c.by))+' 記的':''}</div>
     ${photoCache[id]?`<img class="preview" src="${photoCache[id]}" style="margin-top:14px">`:''}
-    ${c.note?`<p style="margin:14px 0 0">${esc(c.note)}</p>`:''}
+
+    <label>地點名稱</label><input id="d-name" value="${esc(c.name)}">
+    <label>縣市</label>
+    <select id="d-cty">${NAMES.map(n=>`<option ${n===c.county?'selected':''}>${n}</option>`).join('')}</select>
+    <label>日期</label><input id="d-date" type="date" value="${c.date||''}">
+    <label>備註</label><textarea id="d-note">${esc(c.note||'')}</textarea>
+
     ${(c.igs||[]).map(k=>`<div class="igbox"><iframe src="${igEmbed(k)}" loading="lazy"></iframe></div>`).join('')}
+
     <div class="two">
-      <button class="act ghost" id="d-del" style="color:#FF8080">刪掉這次打卡</button>
-      <button class="act" id="d-ig">加一則 IG 貼文</button>
+      <button class="act ghost" id="d-close">關閉</button>
+      <button class="act" id="d-save">存變更</button>
     </div>
-    <button class="act ghost" id="d-close" style="margin-top:10px">關閉</button>`;
+    <button class="act ghost" id="d-ig" style="margin-top:10px">加一則 IG 貼文</button>
+    <button class="act ghost" id="d-del" style="margin-top:10px;color:#FF8080;border-color:#5A2B2B">刪掉這次打卡</button>`;
   $('#veil').classList.add('on');
   $('#d-close').onclick=()=>$('#veil').classList.remove('on');
+  $('#d-save').onclick=async()=>{
+    c.name=$('#d-name').value.trim()||c.name;
+    c.county=$('#d-cty').value;
+    c.date=$('#d-date').value||c.date;
+    c.note=$('#d-note').value.trim();
+    saveLocal();render();await pushCheckin(c);
+    $('#veil').classList.remove('on');toast('改好了');
+  };
   $('#d-ig').onclick=()=>{$('#veil').classList.remove('on');pasteIg()};
   $('#d-del').onclick=async()=>{
     if(!confirm('刪掉這次打卡？'))return;

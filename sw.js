@@ -1,4 +1,4 @@
-const CACHE = 'lianto-0.5.0';   /* 與 index.html 的 VERSION 保持一致 */
+const CACHE = 'lianto-0.6.0';   /* 與 index.html 的 VERSION 保持一致 */
 const SHELL = ['./', './index.html', './config.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', e => {

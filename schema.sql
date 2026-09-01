@@ -122,8 +122,9 @@ begin
    where upper(c.invite_code) = upper(trim(code));
   if target is null then raise exception '邀請碼不存在'; end if;
 
-  select count(*) into n from public.profiles p where p.couple_id = target;
-  if n >= 2 then raise exception '這組邀請碼已經有兩個人了'; end if;
+  select count(*) into n from public.profiles p
+   where p.couple_id = target and p.id <> auth.uid();
+  if n >= 4 then raise exception '這個空間已經有 4 台裝置了，先到設定裡移除一個'; end if;
 
   insert into public.profiles (id, couple_id, display_name)
   values (auth.uid(), target, nick)
@@ -132,6 +133,21 @@ begin
   return target;
 end $$;
 
+create or replace function public.remove_member(target uuid)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare mine uuid;
+begin
+  if auth.uid() is null then raise exception '尚未登入'; end if;
+  mine := public.my_couple();
+  if mine is null then raise exception '你還沒有空間'; end if;
+  if (select p.couple_id from public.profiles p where p.id = target) is distinct from mine
+    then raise exception '這個人不在你的空間裡'; end if;
+  update public.profiles set couple_id = null where id = target;
+end $$;
+
+grant execute on function public.remove_member(uuid) to authenticated, anon;
 grant execute on function public.create_couple(text) to authenticated, anon;
 grant execute on function public.join_couple(text, text) to authenticated, anon;
 

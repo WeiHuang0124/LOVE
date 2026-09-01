@@ -2,5 +2,5 @@
    Supabase Dashboard → Project Settings → API 找得到。 */
 window.LIANTO_CONFIG = {
   url:     "https://vabghkwuydhzbgtodoce.supabase.co",
-  anonKey: "sb_publishable_cRRlemmTVOj6DvYMsdvBQA_1rm-e..."
+  anonKey: "sb_publishable_cRRlemmTVOj6DvYMsdvBQA_1rm-ecOx"
 };

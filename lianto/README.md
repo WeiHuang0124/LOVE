@@ -1,3 +1,4 @@
+
 # 戀途 v0.6.0
 
 Cloudflare Worker + 靜態檔案。Worker 名稱 `love`。
